@@ -1,0 +1,911 @@
+-- Base Protector V3 - Place in StarterPlayer > StarterPlayerScripts (LocalScript)
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Stats = game:GetService("Stats")
+
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait()
+    LocalPlayer = Players.LocalPlayer
+end
+
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+-- Find Admin Remote
+local adminRemote = nil
+local notificationRemote = nil
+
+task.spawn(function()
+    -- First try exact path
+    local Packages = ReplicatedStorage:WaitForChild("Packages", 5)
+    if Packages then
+        local Net = Packages:WaitForChild("Net", 5)
+        if Net then
+            adminRemote = Net:FindFirstChild("RE/352aad5B-c786-4998-886b-3e4fa390721e")
+            if adminRemote and adminRemote:IsA("RemoteEvent") then
+                warn("✅ Found Admin Remote by exact path:", adminRemote:GetFullName())
+            else
+                -- Try case-insensitive search
+                for _, obj in pairs(Net:GetChildren()) do
+                    if obj:IsA("RemoteEvent") and obj.Name:lower():find("352aad5") then
+                        adminRemote = obj
+                        warn("✅ Found Admin Remote by GUID:", adminRemote:GetFullName())
+                        break
+                    end
+                end
+            end
+            
+            -- Find notification remote
+            notificationRemote = Net:FindFirstChild("RE/NotificationService/Notify")
+            if notificationRemote then
+                warn("✅ Found Notification Remote:", notificationRemote:GetFullName())
+            end
+        end
+    end
+    
+    -- Fallback: search entire game
+    if not adminRemote then
+        for _, obj in pairs(game:GetDescendants()) do
+            if obj:IsA("RemoteEvent") and obj.Name:lower():find("352aad5") then
+                adminRemote = obj
+                warn("✅ Found Admin Remote (fallback):", adminRemote:GetFullName())
+                break
+            end
+        end
+    end
+    
+    if adminRemote then
+        warn("✅ Admin Remote ready to use")
+    else
+        warn("❌ Admin Remote not found - commands will not work!")
+    end
+end)
+
+-- Settings
+local spamKickEnabled = false
+local spamNoKickEnabled = false
+local antiTPEnabled = false
+local punishedPlayers = {}
+local antiTPCooldowns = {}
+
+local priorityCommands = {"rocket", "balloon"}
+local secondaryCommands = {"inverse", "tiny", "morph", "jumpscare"}
+local defenseCommand = "balloon"
+
+-- Helper Functions
+local function sendCommand(command, targetPlayer)
+    if not adminRemote then
+        warn("⚠️ Admin Remote not found, cannot send command:", command)
+        return
+    end
+    
+    task.spawn(function()
+        pcall(function()
+            -- Fire the admin remote with proper format: GUID, player, command
+            adminRemote:FireServer("78a772b6-9e1c-4827-ab8b-04a07838f298", targetPlayer, command)
+        end)
+    end)
+end
+
+-- Get all players currently in YOUR plot
+local function getPlayersInMyPlot()
+    local myPlot = findMyPlot()
+    if not myPlot then return {} end
+    
+    local playersInPlot = {}
+    local plotPosition = myPlot:GetPivot().Position
+    local plotSize = 120 -- Smaller detection radius for more accurate plot bounds
+    
+    -- Check Decorations.Model folder for more accurate plot bounds
+    local decorations = myPlot:FindFirstChild("Decorations")
+    if decorations then
+        local model = decorations:FindFirstChild("Model")
+        if model then
+            plotPosition = model:GetPivot().Position
+        end
+    end
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local distance = (hrp.Position - plotPosition).Magnitude
+                if distance < plotSize then
+                    table.insert(playersInPlot, player)
+                    print("🔍 Player in plot:", player.Name, "Distance:", math.floor(distance))
+                end
+            end
+        end
+    end
+    
+    return playersInPlot
+end
+
+local function executeAPSpam(targetUsername, shouldKick)
+    if not targetUsername or targetUsername == "" then return end
+    
+    -- Find the player object by username
+    local targetPlayer = nil
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Name == targetUsername then
+            targetPlayer = player
+            break
+        end
+    end
+    
+    if not targetPlayer then
+        warn("⚠️ Could not find player:", targetUsername)
+        return
+    end
+    
+    print("🎯 Executing AP spam on:", targetUsername)
+    
+    -- Fire balloon FIRST for instant reaction
+    sendCommand("balloon", targetPlayer)
+    
+    task.wait(0.02)
+    
+    -- Fire jail immediately after
+    sendCommand("jail", targetPlayer)
+    
+    task.wait(0.03)
+    
+    -- Then spam priority commands
+    for _, cmd in ipairs(priorityCommands) do
+        sendCommand(cmd, targetPlayer)
+    end
+    
+    task.wait(0.03)
+    
+    -- Then secondary commands
+    for _, cmd in ipairs(secondaryCommands) do
+        sendCommand(cmd, targetPlayer)
+    end
+    
+    -- Kick yourself from the game if requested
+    if shouldKick then
+        task.wait(0.1)
+        LocalPlayer:Kick("Saved by Sky")
+    end
+end
+
+local function executeDefense(targetPlayerName, shouldKick)
+    if (shouldKick and not spamKickEnabled) or (not shouldKick and not spamNoKickEnabled) then return end
+    if punishedPlayers[targetPlayerName] then return end
+    
+    punishedPlayers[targetPlayerName] = true
+    
+    print("🛡️ Executing defense on:", targetPlayerName)
+    
+    -- Find the player object
+    local targetPlayer = nil
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Name == targetPlayerName then
+            targetPlayer = player
+            break
+        end
+    end
+    
+    if not targetPlayer then
+        warn("⚠️ Could not find player for defense:", targetPlayerName)
+        return
+    end
+    
+    -- Fire balloon immediately
+    sendCommand(defenseCommand, targetPlayer)
+    
+    task.wait(0.05)
+    executeAPSpam(targetPlayerName, shouldKick)
+    
+    task.delay(30, function() punishedPlayers[targetPlayerName] = nil end)
+end
+
+local function executeAntiTP(targetPlayerName)
+    if not antiTPEnabled then return end
+    if antiTPCooldowns[targetPlayerName] then return end
+    
+    antiTPCooldowns[targetPlayerName] = true
+    
+    print("🚨 Anti-TP: Quick reacting to", targetPlayerName)
+    
+    -- Find the player object
+    local targetPlayer = nil
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Name == targetPlayerName then
+            targetPlayer = player
+            break
+        end
+    end
+    
+    if not targetPlayer then
+        warn("⚠️ Could not find player for Anti-TP:", targetPlayerName)
+        return
+    end
+    
+    -- Fire balloon FIRST for instant reaction
+    sendCommand("balloon", targetPlayer)
+    
+    task.wait(0.02)
+    
+    -- Fire jail immediately after
+    sendCommand("jail", targetPlayer)
+    
+    task.delay(5, function() antiTPCooldowns[targetPlayerName] = nil end)
+end
+
+function findMyPlot()
+    local plotsFolder = workspace:FindFirstChild("Plots")
+    if not plotsFolder then return nil end
+    
+    for _, plot in pairs(plotsFolder:GetChildren()) do
+        local plotSign = plot:FindFirstChild("PlotSign")
+        if plotSign then
+            local yourBase = plotSign:FindFirstChild("YourBase")
+            if yourBase and yourBase:IsA("BillboardGui") and yourBase.Enabled == true then
+                return plot
+            end
+        end
+    end
+    
+    local playerName = LocalPlayer.Name
+    for _, plot in pairs(plotsFolder:GetChildren()) do
+        if string.find(plot.Name, playerName) then
+            return plot
+        end
+        
+        local owner = plot:FindFirstChild("Owner")
+        if owner and owner.Value == LocalPlayer then
+            return plot
+        end
+    end
+    
+    local character = LocalPlayer.Character
+    if character then
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            for _, plot in pairs(plotsFolder:GetChildren()) do
+                local plotPart = plot:FindFirstChild("PlotPart") or plot:FindFirstChild("Base")
+                if plotPart and plotPart:IsA("BasePart") then
+                    local distance = (hrp.Position - plotPart.Position).Magnitude
+                    if distance < 100 then
+                        return plot
+                    end
+                end
+            end
+        end
+    end
+    
+    return nil
+end
+
+local function stripTags(str)
+    return string.gsub(str, "<.->", "")
+end
+
+-- Anti-TP System - monitors players in your plot near decorations/animals
+local function startAntiTP()
+    task.spawn(function()
+        task.wait(3)
+        
+        local myPlot = findMyPlot()
+        if not myPlot then
+            print("⚠️ Anti-TP: Could not find plot")
+            return
+        end
+        
+        print("✅ Anti-TP: Monitoring plot", myPlot.Name)
+        
+        local myDecorations = myPlot:FindFirstChild("Decorations")
+        local myAnimals = myPlot:FindFirstChild("AnimalPodiums")
+        
+        if not myDecorations and not myAnimals then
+            print("⚠️ Anti-TP: No decorations or animals found")
+        end
+        
+        local detectedPlayers = {}
+        
+        while task.wait(0.1) do
+            if not antiTPEnabled then continue end
+            
+            -- Re-find plot components if needed
+            if not myDecorations then
+                myDecorations = myPlot:FindFirstChild("Decorations")
+            end
+            if not myAnimals then
+                myAnimals = myPlot:FindFirstChild("AnimalPodiums")
+            end
+            
+            -- Get all players in plot
+            local playersInPlot = getPlayersInMyPlot()
+            
+            for _, player in ipairs(playersInPlot) do
+                if player.Character then
+                    local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local tooClose = false
+                        
+                        -- Check if near decorations (tighter range)
+                        if myDecorations then
+                            local decorModel = myDecorations:FindFirstChild("Model")
+                            if decorModel then
+                                local dist = (hrp.Position - decorModel:GetPivot().Position).Magnitude
+                                if dist < 20 then
+                                    tooClose = true
+                                    print("🔴 Player near decorations:", player.Name, "Distance:", math.floor(dist))
+                                end
+                            end
+                        end
+                        
+                        -- Check if touching any animal parts
+                        if myAnimals and not tooClose then
+                            for _, animalPodium in ipairs(myAnimals:GetChildren()) do
+                                for _, part in ipairs(animalPodium:GetDescendants()) do
+                                    if part:IsA("BasePart") then
+                                        part.CanTouch = true
+                                        local touchingParts = part:GetTouchingParts()
+                                        for _, touchingPart in ipairs(touchingParts) do
+                                            if touchingPart.Parent == player.Character then
+                                                tooClose = true
+                                                print("🔴 Player touching animal:", player.Name)
+                                                break
+                                            end
+                                        end
+                                        if tooClose then break end
+                                    end
+                                end
+                                if tooClose then break end
+                            end
+                        end
+                        
+                        -- Fire anti-TP if player is too close to protected areas
+                        if tooClose and not detectedPlayers[player.Name] then
+                            detectedPlayers[player.Name] = true
+                            executeAntiTP(player.Name)
+                            
+                            task.delay(2, function()
+                                detectedPlayers[player.Name] = nil
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- Base Defender - detects WHO is stealing
+local function startBaseDefender()
+    local myPlot = nil
+    
+    for i = 1, 10 do
+        myPlot = findMyPlot()
+        if myPlot then break end
+        task.wait(1)
+    end
+    
+    if not myPlot then 
+        print("⚠️ Could not find plot for base defender")
+        return 
+    end
+    
+    print("✅ Base Defender: Monitoring plot", myPlot.Name)
+    
+    -- Setup notification remote listener for stealing detection
+    task.spawn(function()
+        if notificationRemote then
+            notificationRemote.OnClientEvent:Connect(function(msg)
+                if typeof(msg) ~= "string" then return end
+                if not msg:find("Someone is stealing your") and not msg:find("Someone is robbing your") then return end
+                
+                print("🚨 STEAL DETECTED! Message:", msg)
+                
+                -- Detect who's stealing
+                task.spawn(function()
+                    task.wait(0.005)
+                    
+                    -- Get all players currently in the plot
+                    local playersInPlot = getPlayersInMyPlot()
+                    
+                    if #playersInPlot == 0 then
+                        print("⚠️ Steal detected but no players in plot!")
+                        return
+                    end
+                    
+                    -- If only one player in plot, they're the thief
+                    if #playersInPlot == 1 then
+                        local thief = playersInPlot[1]
+                        print("🚨 THIEF IDENTIFIED:", thief.Name, "(only player in plot)")
+                        executeDefense(thief.Name, spamKickEnabled)
+                        return
+                    end
+                    
+                    -- Multiple players - find who's closest to animals or decorations
+                    local myDecorations = myPlot:FindFirstChild("Decorations")
+                    local myAnimals = myPlot:FindFirstChild("AnimalPodiums")
+                    
+                    local closestPlayer = nil
+                    local closestDistance = math.huge
+                    
+                    for _, player in ipairs(playersInPlot) do
+                        if player.Character then
+                            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                            if hrp then
+                                local minDist = math.huge
+                                
+                                -- Check distance to decorations
+                                if myDecorations then
+                                    local decorModel = myDecorations:FindFirstChild("Model")
+                                    if decorModel then
+                                        local dist = (hrp.Position - decorModel:GetPivot().Position).Magnitude
+                                        minDist = math.min(minDist, dist)
+                                    end
+                                end
+                                
+                                -- Check distance to animals
+                                if myAnimals then
+                                    for _, animal in ipairs(myAnimals:GetChildren()) do
+                                        local dist = (hrp.Position - animal:GetPivot().Position).Magnitude
+                                        minDist = math.min(minDist, dist)
+                                    end
+                                end
+                                
+                                if minDist < closestDistance then
+                                    closestDistance = minDist
+                                    closestPlayer = player
+                                end
+                            end
+                        end
+                    end
+                    
+                    if closestPlayer then
+                        print("🚨 THIEF IDENTIFIED:", closestPlayer.Name, "(closest to stealable items)")
+                        executeDefense(closestPlayer.Name, spamKickEnabled)
+                    else
+                        -- Fallback: punish first player in plot
+                        print("⚠️ Using fallback - punishing:", playersInPlot[1].Name)
+                        executeDefense(playersInPlot[1].Name, spamKickEnabled)
+                    end
+                end)
+            end)
+            
+            warn("✅ Base Defender: Listening to notification remote for stealing alerts")
+        else
+            warn("⚠️ Base Defender: Notification remote not found, using GUI fallback")
+            
+            -- Fallback to GUI detection if notification remote not found
+            local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+            local trackedTexts = {}
+            
+            RunService.RenderStepped:Connect(function()
+                if not spamKickEnabled and not spamNoKickEnabled then return end
+                
+                for _, gui in ipairs(playerGui:GetDescendants()) do
+                    if (gui:IsA("TextLabel") or gui:IsA("TextButton")) and gui.Visible then
+                        local text = gui.Text
+                        if text and text ~= "" then
+                            local lowerText = string.lower(stripTags(text))
+                            if (string.find(lowerText, "stealing", 1, true) or string.find(lowerText, "robbing", 1, true)) and not trackedTexts[gui] then
+                                trackedTexts[gui] = true
+                                print("🔍 Steal detected via GUI! Finding thief...")
+                                
+                                -- Same detection logic as above
+                                task.spawn(function()
+                                    task.wait(0.005)
+                                    local playersInPlot = getPlayersInMyPlot()
+                                    
+                                    if #playersInPlot == 0 then
+                                        print("⚠️ Steal detected but no players in plot!")
+                                        return
+                                    end
+                                    
+                                    if #playersInPlot == 1 then
+                                        executeDefense(playersInPlot[1].Name, spamKickEnabled)
+                                        return
+                                    end
+                                    
+                                    local myDecorations = myPlot:FindFirstChild("Decorations")
+                                    local myAnimals = myPlot:FindFirstChild("AnimalPodiums")
+                                    local closestPlayer = nil
+                                    local closestDistance = math.huge
+                                    
+                                    for _, player in ipairs(playersInPlot) do
+                                        if player.Character then
+                                            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                                            if hrp then
+                                                local minDist = math.huge
+                                                
+                                                if myDecorations then
+                                                    local decorModel = myDecorations:FindFirstChild("Model")
+                                                    if decorModel then
+                                                        minDist = math.min(minDist, (hrp.Position - decorModel:GetPivot().Position).Magnitude)
+                                                    end
+                                                end
+                                                
+                                                if myAnimals then
+                                                    for _, animal in ipairs(myAnimals:GetChildren()) do
+                                                        minDist = math.min(minDist, (hrp.Position - animal:GetPivot().Position).Magnitude)
+                                                    end
+                                                end
+                                                
+                                                if minDist < closestDistance then
+                                                    closestDistance = minDist
+                                                    closestPlayer = player
+                                                end
+                                            end
+                                        end
+                                    end
+                                    
+                                    if closestPlayer then
+                                        executeDefense(closestPlayer.Name, spamKickEnabled)
+                                    else
+                                        executeDefense(playersInPlot[1].Name, spamKickEnabled)
+                                    end
+                                end)
+                                
+                                task.delay(5, function() trackedTexts[gui] = nil end)
+                                break
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+end
+
+-- ChiraqHub Style GUI with Blue-Gray Theme
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "BaseProtector"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Main Control Panel
+local controlPanel = Instance.new("Frame")
+controlPanel.Name = "ControlPanel"
+controlPanel.Size = UDim2.new(0, 240, 0, 220)
+controlPanel.Position = UDim2.new(1, -250, 0, 10)
+controlPanel.BackgroundColor3 = Color3.fromRGB(15, 20, 28)
+controlPanel.BackgroundTransparency = 0.005
+controlPanel.BorderSizePixel = 0
+controlPanel.Active = true
+controlPanel.Draggable = true
+controlPanel.Parent = screenGui
+
+local panelCorner = Instance.new("UICorner")
+panelCorner.CornerRadius = UDim.new(0, 12)
+panelCorner.Parent = controlPanel
+
+-- Animated White Border (ChiraqHub style)
+local panelStroke = Instance.new("UIStroke")
+panelStroke.Color = Color3.fromRGB(255, 255, 255)
+panelStroke.Thickness = 3.2
+panelStroke.Transparency = 0
+panelStroke.Parent = controlPanel
+
+TweenService:Create(panelStroke, TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+    Transparency = 0.6,
+    Thickness = 2.5
+}):Play()
+
+-- Title Bar with Blue-Gray Gradient
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.Size = UDim2.new(1, 0, 0, 35)
+titleBar.BackgroundColor3 = Color3.fromRGB(25, 35, 48)
+titleBar.BorderSizePixel = 0
+titleBar.Parent = controlPanel
+
+local titleBarCorner = Instance.new("UICorner")
+titleBarCorner.CornerRadius = UDim.new(0, 12)
+titleBarCorner.Parent = titleBar
+
+local titleBarGradient = Instance.new("UIGradient")
+titleBarGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(45, 60, 85)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(60, 75, 95))
+})
+titleBarGradient.Rotation = 45
+titleBarGradient.Parent = titleBar
+
+local panelTitle = Instance.new("TextLabel")
+panelTitle.Size = UDim2.new(1, -65, 0, 35)
+panelTitle.Position = UDim2.new(0, 12, 0, 0)
+panelTitle.BackgroundTransparency = 1
+panelTitle.Text = "Base Protector"
+panelTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+panelTitle.TextSize = 14
+panelTitle.Font = Enum.Font.GothamBold
+panelTitle.TextXAlignment = Enum.TextXAlignment.Left
+panelTitle.Parent = titleBar
+
+-- Metallic Text Gradient (ChiraqHub style)
+local TextGradient = Instance.new("UIGradient")
+TextGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(140, 140, 140)),
+    ColorSequenceKeypoint.new(0.2, Color3.fromRGB(255, 255, 255)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(160, 160, 160)),
+    ColorSequenceKeypoint.new(0.8, Color3.fromRGB(255, 255, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(140, 140, 140))
+})
+TextGradient.Parent = panelTitle
+
+-- Animated text gradient
+task.spawn(function()
+    while true do
+        TextGradient.Rotation = 25
+        TextGradient.Offset = Vector2.new(-1, 0)
+        
+        local anim = TweenService:Create(TextGradient, TweenInfo.new(4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+            Offset = Vector2.new(1, 0)
+        })
+        
+        anim:Play()
+        anim.Completed:Wait()
+        task.wait(0.5)
+    end
+end)
+
+-- Minimize Button
+local minimizeButton = Instance.new("TextButton")
+minimizeButton.Size = UDim2.new(0, 24, 0, 24)
+minimizeButton.Position = UDim2.new(1, -54, 0, 5.5)
+minimizeButton.BackgroundColor3 = Color3.fromRGB(80, 120, 180)
+minimizeButton.Text = "─"
+minimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeButton.TextSize = 14
+minimizeButton.Font = Enum.Font.GothamBold
+minimizeButton.Parent = titleBar
+
+local minimizeCorner = Instance.new("UICorner")
+minimizeCorner.CornerRadius = UDim.new(0, 6)
+minimizeCorner.Parent = minimizeButton
+
+-- Close Button
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 24, 0, 24)
+closeButton.Position = UDim2.new(1, -26, 0, 5.5)
+closeButton.BackgroundColor3 = Color3.fromRGB(200, 70, 85)
+closeButton.Text = "×"
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.TextSize = 18
+closeButton.Font = Enum.Font.GothamBold
+closeButton.Parent = titleBar
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 6)
+closeCorner.Parent = closeButton
+
+-- Button hover effects
+minimizeButton.MouseEnter:Connect(function()
+    TweenService:Create(minimizeButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(100, 140, 200)}):Play()
+end)
+minimizeButton.MouseLeave:Connect(function()
+    TweenService:Create(minimizeButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(80, 120, 180)}):Play()
+end)
+
+closeButton.MouseEnter:Connect(function()
+    TweenService:Create(closeButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(220, 90, 105)}):Play()
+end)
+closeButton.MouseLeave:Connect(function()
+    TweenService:Create(closeButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(200, 70, 85)}):Play()
+end)
+
+-- Content Container
+local contentContainer = Instance.new("Frame")
+contentContainer.Name = "ContentContainer"
+contentContainer.Size = UDim2.new(1, -16, 1, -43)
+contentContainer.Position = UDim2.new(0, 8, 0, 39)
+contentContainer.BackgroundTransparency = 1
+contentContainer.Parent = controlPanel
+
+-- Function to create ChiraqHub style toggle button
+local function createToggleButton(text, yPos, enabled, onColor)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, 0, 0, 52)
+    button.Position = UDim2.new(0, 0, 0, yPos)
+    button.BackgroundColor3 = Color3.fromRGB(20, 28, 38)
+    button.BorderSizePixel = 0
+    button.Text = ""
+    button.AutoButtonColor = false
+    button.Parent = contentContainer
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 8)
+    btnCorner.Parent = button
+    
+    local btnStroke = Instance.new("UIStroke")
+    btnStroke.Color = enabled and onColor or Color3.fromRGB(50, 60, 75)
+    btnStroke.Thickness = 1.5
+    btnStroke.Transparency = enabled and 0 or 0.5
+    btnStroke.Parent = button
+    
+    -- Gradient background
+    local btnGradient = Instance.new("UIGradient")
+    btnGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, enabled and onColor or Color3.fromRGB(20, 28, 38)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(20, 28, 38)),
+        ColorSequenceKeypoint.new(1, enabled and onColor or Color3.fromRGB(20, 28, 38))
+    })
+    btnGradient.Transparency = NumberSequence.new(0.85)
+    btnGradient.Rotation = 90
+    btnGradient.Parent = button
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -62, 1, 0)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = enabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(160, 170, 185)
+    label.TextSize = 11
+    label.Font = Enum.Font.GothamBold
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextWrapped = true
+    label.Parent = button
+    
+    -- Modern toggle switch
+    local switchBG = Instance.new("Frame")
+    switchBG.Size = UDim2.new(0, 42, 0, 22)
+    switchBG.Position = UDim2.new(1, -46, 0.5, -11)
+    switchBG.BackgroundColor3 = enabled and onColor or Color3.fromRGB(35, 45, 60)
+    switchBG.BorderSizePixel = 0
+    switchBG.Parent = button
+    
+    local switchBGCorner = Instance.new("UICorner")
+    switchBGCorner.CornerRadius = UDim.new(1, 0)
+    switchBGCorner.Parent = switchBG
+    
+    local slider = Instance.new("Frame")
+    slider.Size = UDim2.new(0, 16, 0, 16)
+    slider.Position = enabled and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+    slider.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    slider.BorderSizePixel = 0
+    slider.Parent = switchBG
+    
+    local sliderCorner = Instance.new("UICorner")
+    sliderCorner.CornerRadius = UDim.new(1, 0)
+    sliderCorner.Parent = slider
+    
+    -- Hover effect
+    button.MouseEnter:Connect(function()
+        TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25, 33, 43)}):Play()
+    end)
+    button.MouseLeave:Connect(function()
+        TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(20, 28, 38)}):Play()
+    end)
+    
+    return button, btnStroke, switchBG, slider, onColor, label, btnGradient
+end
+
+-- Create toggle buttons with blue-gray theme
+local spamKickButton, spamKickStroke, spamKickBG, spamKickSlider, spamKickOnColor, spamKickLabel, spamKickGradient = createToggleButton(
+    "SPAM IF STEALING (KICK)",
+    0,
+    spamKickEnabled,
+    Color3.fromRGB(200, 80, 100)
+)
+
+local spamNoKickButton, spamNoKickStroke, spamNoKickBG, spamNoKickSlider, spamNoKickOnColor, spamNoKickLabel, spamNoKickGradient = createToggleButton(
+    "SPAM IF STEALING (NO KICK)",
+    58,
+    spamNoKickEnabled,
+    Color3.fromRGB(80, 180, 120)
+)
+
+local antiTPButton, antiTPStroke, antiTPBG, antiTPSlider, antiTPOnColor, antiTPLabel, antiTPGradient = createToggleButton(
+    "ANTI-TP SCAM (RECOMMENDED)",
+    116,
+    antiTPEnabled,
+    Color3.fromRGB(220, 160, 70)
+)
+
+-- Minimize functionality
+local isMinimized = false
+local originalSize = controlPanel.Size
+
+minimizeButton.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    
+    local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+    
+    if isMinimized then
+        TweenService:Create(controlPanel, tweenInfo, {Size = UDim2.new(0, 240, 0, 35)}):Play()
+        minimizeButton.Text = "□"
+        contentContainer.Visible = false
+    else
+        TweenService:Create(controlPanel, tweenInfo, {Size = originalSize}):Play()
+        minimizeButton.Text = "─"
+        contentContainer.Visible = true
+    end
+end)
+
+-- Close button
+closeButton.MouseButton1Click:Connect(function()
+    TweenService:Create(controlPanel, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+        Size = UDim2.new(0, 0, 0, 0),
+        Position = UDim2.new(1, -125, 0, 120)
+    }):Play()
+    
+    task.wait(0.3)
+    screenGui:Destroy()
+end)
+
+-- Toggle for Spam Kick
+spamKickButton.MouseButton1Click:Connect(function()
+    spamKickEnabled = not spamKickEnabled
+    
+    local tweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local color = spamKickEnabled and spamKickOnColor or Color3.fromRGB(35, 45, 60)
+    local strokeColor = spamKickEnabled and spamKickOnColor or Color3.fromRGB(50, 60, 75)
+    local sliderPos = spamKickEnabled and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+    local labelColor = spamKickEnabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(160, 170, 185)
+    
+    TweenService:Create(spamKickStroke, tweenInfo, {Color = strokeColor, Transparency = spamKickEnabled and 0 or 0.5}):Play()
+    TweenService:Create(spamKickBG, tweenInfo, {BackgroundColor3 = color}):Play()
+    TweenService:Create(spamKickSlider, tweenInfo, {Position = sliderPos}):Play()
+    TweenService:Create(spamKickLabel, tweenInfo, {TextColor3 = labelColor}):Play()
+    
+    spamKickGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, spamKickEnabled and spamKickOnColor or Color3.fromRGB(20, 28, 38)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(20, 28, 38)),
+        ColorSequenceKeypoint.new(1, spamKickEnabled and spamKickOnColor or Color3.fromRGB(20, 28, 38))
+    })
+end)
+
+-- Toggle for Spam No Kick
+spamNoKickButton.MouseButton1Click:Connect(function()
+    spamNoKickEnabled = not spamNoKickEnabled
+    
+    local tweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local color = spamNoKickEnabled and spamNoKickOnColor or Color3.fromRGB(35, 45, 60)
+    local strokeColor = spamNoKickEnabled and spamNoKickOnColor or Color3.fromRGB(50, 60, 75)
+    local sliderPos = spamNoKickEnabled and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+    local labelColor = spamNoKickEnabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(160, 170, 185)
+    
+    TweenService:Create(spamNoKickStroke, tweenInfo, {Color = strokeColor, Transparency = spamNoKickEnabled and 0 or 0.5}):Play()
+    TweenService:Create(spamNoKickBG, tweenInfo, {BackgroundColor3 = color}):Play()
+    TweenService:Create(spamNoKickSlider, tweenInfo, {Position = sliderPos}):Play()
+    TweenService:Create(spamNoKickLabel, tweenInfo, {TextColor3 = labelColor}):Play()
+    
+    spamNoKickGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, spamNoKickEnabled and spamNoKickOnColor or Color3.fromRGB(20, 28, 38)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(20, 28, 38)),
+        ColorSequenceKeypoint.new(1, spamNoKickEnabled and spamNoKickOnColor or Color3.fromRGB(20, 28, 38))
+    })
+end)
+
+-- Toggle for Anti-TP
+antiTPButton.MouseButton1Click:Connect(function()
+    antiTPEnabled = not antiTPEnabled
+    
+    local tweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local color = antiTPEnabled and antiTPOnColor or Color3.fromRGB(35, 45, 60)
+    local strokeColor = antiTPEnabled and antiTPOnColor or Color3.fromRGB(50, 60, 75)
+    local sliderPos = antiTPEnabled and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+    local labelColor = antiTPEnabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(160, 170, 185)
+    
+    TweenService:Create(antiTPStroke, tweenInfo, {Color = strokeColor, Transparency = antiTPEnabled and 0 or 0.5}):Play()
+    TweenService:Create(antiTPBG, tweenInfo, {BackgroundColor3 = color}):Play()
+    TweenService:Create(antiTPSlider, tweenInfo, {Position = sliderPos}):Play()
+    TweenService:Create(antiTPLabel, tweenInfo, {TextColor3 = labelColor}):Play()
+    
+    antiTPGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, antiTPEnabled and antiTPOnColor or Color3.fromRGB(20, 28, 38)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(20, 28, 38)),
+        ColorSequenceKeypoint.new(1, antiTPEnabled and antiTPOnColor or Color3.fromRGB(20, 28, 38))
+    })
+end)
+
+-- Start Systems
+startBaseDefender()
+startAntiTP()
+
+print("✅ Base Protector V3 loaded successfully!")
